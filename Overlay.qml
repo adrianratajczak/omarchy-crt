@@ -6,6 +6,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Item {
@@ -21,6 +22,7 @@ Item {
 
   function open(payloadJson) {
     root.opened = true;
+    Qt.callLater(function() { keyScope.forceActiveFocus(); });
   }
 
   function close() {

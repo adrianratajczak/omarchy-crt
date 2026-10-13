@@ -16,8 +16,6 @@ Item {
   id: screen
   property var svc: null
 
-  readonly property real W: width
-  readonly property real H: height
   readonly property real dpr: Screen.devicePixelRatio || 1
 
   function reqStatic() {
@@ -35,6 +33,7 @@ Item {
 
   onWidthChanged: screen.reqStatic()
   onHeightChanged: screen.reqStatic()
+  onVisibleChanged: { if (visible) screen.reqStatic(); }
 
   // Kontener całości (degauss wobble — przybliżenie: rusza się nakładka,
   // nie treść pod spodem; treść jest poza zasięgiem overlayu).

@@ -284,6 +284,9 @@ Item {
   Process {
     id: mkdirProc
     command: ["mkdir", "-p", root.configDir]
+    onExited: function(code) {
+      if (code === 0) cfgView.reload();
+    }
   }
 
   // ---------------- IPC (m.in. dla widgetu, overlayu, bin/crt-kineskop) ----------------
@@ -291,14 +294,14 @@ Item {
     target: root.pluginId
     function status(): string { return JSON.stringify(root.snapshot()); }
     function toggle(): string { return root.togglePower(); }
-    function power(on: string): string {
-      if (on === "on") root.powerOn();
-      else if (on === "off") root.powerOff();
+    function power(state: string): string {
+      if (state === "on") root.powerOn();
+      else if (state === "off") root.powerOff();
       else return root.togglePower();
       return root.powered ? "on" : "off";
     }
-    function motion(on: string): string {
-      root.motion = (on === "on");
+    function motion(state: string): string {
+      root.motion = (state === "on");
       root.saveSoon();
       return root.motion ? "on" : "off";
     }
