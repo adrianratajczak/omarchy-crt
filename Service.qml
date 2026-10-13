@@ -68,6 +68,31 @@ Item {
   property real flashOp: 0
   property bool wobbling: false
   property string lastWritten: ""
+  property int loadFails: 0
+
+  // Ponawianie odczytu zamiast slepego zapisu defaultow: przy duszacej sie
+  // petli / goracym przeladowaniu pierwszy odczyt moze nie wyjsc, a zapis
+  // defaultow (enabled:true) skasowalby swiadoma decyzje uzytkownika.
+  Timer {
+    id: loadRetry
+    interval: 500
+    repeat: false
+    onTriggered: cfgView.reload()
+  }
+
+  function writeDefaults() {
+    var d = {
+      enabled: true, motion: true, preset: "light"
+    };
+    for (var k in CrtPresets.DEFAULTS) {
+      if (d[k] === undefined) d[k] = CrtPresets.DEFAULTS[k];
+    }
+    var json = JSON.stringify(d);
+    root.lastWritten = json;
+    root.applyPatch(d);
+    root.presetName = "light";
+    cfgView.setText(json);
+  }
 
   function snapshot() {
     return {
@@ -228,14 +253,20 @@ Item {
     id: cfgView
     path: root.configFile
     watchChanges: true
-    onLoaded: root.applyFile(text())
+    onLoaded: {
+      root.loadFails = 0;
+      root.applyFile(text());
+    }
     onLoadFailed: function(err) {
-      // Brak pliku (pierwszy start) — zapisz defaulty.
-      root.saveSoon();
+      // Brak pliku (pierwszy start) albo przejsciowy blad IO — sprobuj
+      // jeszcze kilka razy zanim utworzysz defaulty.
+      if (root.loadFails++ < 5) loadRetry.restart();
+      else root.writeDefaults();
     }
     onFileChanged: cfgView.reload()
     onSaveFailed: function(err) {
       console.warn("[crt] zapis ustawień nieudany: " + err);
+      root.lastWritten = ""; // sprobuj ponownie przy nastepnym zapisie
     }
   }
 
