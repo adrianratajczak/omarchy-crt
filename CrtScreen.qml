@@ -54,19 +54,7 @@ Item {
       PropertyAnimation { target: layers; property: "rotation"; to: 0; duration: 150 }
     }
 
-    // ---- grade: przybliżenie (overlay jest NAD treścią, więc prawdziwy
-    // saturate/sepia/brightness da tylko shader Hyprland — hypr/crt-grade.frag).
-    // Tu: ciepły tint (warmth) + globalne przyciemnienie (vig). ----
-    Rectangle {
-      anchors.fill: parent
-      color: "#ffb36b"
-      opacity: screen.svc ? screen.svc.warmth * 0.10 : 0
-    }
-    Rectangle {
-      anchors.fill: parent
-      color: "black"
-      opacity: screen.svc ? screen.svc.vig * 0.10 : 0
-    }
+    // ---- grade: patrz staticCv (tint+dim baked) ----
 
     // ---- statyczne szkło: chroma, scanlines, maska, soczewka, winieta,
     //      krawędzie, odblask (jeden Canvas, repaint tylko na zmianę) ----
@@ -80,6 +68,16 @@ Item {
         var w = width, h = height;
         var s = screen.svc;
         ctx.clearRect(0, 0, w, h);
+
+        // grade (w baked: tint + dim; prawdziwy saturate tylko shaderem Hyprland)
+        if (s.warmth > 0.003) {
+          ctx.fillStyle = "rgba(255,179,107," + (0.10 * s.warmth).toFixed(3) + ")";
+          ctx.fillRect(0, 0, w, h);
+        }
+        if (s.vig > 0.003) {
+          ctx.fillStyle = "rgba(0,0,0," + (0.10 * s.vig).toFixed(3) + ")";
+          ctx.fillRect(0, 0, w, h);
+        }
 
         // chroma: boczne tinty (jak .crt-chroma, op = chroma*.45)
         var ca = s.chroma * 0.45;
@@ -261,7 +259,7 @@ Item {
       }
     }
     Timer {
-      interval: 42
+      interval: 50
       repeat: true
       running: noiseCv.visible && screen.visible
       onTriggered: noiseCv.requestPaint()

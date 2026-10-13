@@ -185,8 +185,13 @@ Item {
     root.noiseOp = root.noise * 0.35;
   }
 
-  FrameAnimation {
+  // Petla silnika 30 fps (zamiast FrameAnimation): pelnoekranowy overlay
+  // przerysowywany co klatke to glowny koszt; 30 fps wystarcza dla fosforu,
+  // a formuly uzywaja czasu rzeczywistego, wiec sa poprawne przy kazdym tempie.
+  Timer {
     id: engine
+    interval: 33
+    repeat: true
     running: root.powered && root.motion && !root.dying
     onTriggered: root.tick()
   }

@@ -19,8 +19,10 @@ grade -> chroma -> scanlines -> mask -> rolling -> persist-trail -> noise (192x1
 -> flicker -> persist-glow -> bulge -> vignette -> tubeglow -> edge-ca -> edge-smear
 -> bloom -> glass -> flash
 
-Zasady wydajnosci z oryginalu zachowane 1:1: jedna petla (FrameAnimation),
-w klatce tylko opacity i pozycja y (rolling/trail), szum max ~24 Hz,
+Zasady wydajnosci z oryginalu, dostrojone do pulpitu: jedna petla
+(Timer 30 fps — pelnoekranowy repaint co klatke to glowny koszt, a 30 fps
+wystarcza dla fosforu; formuly uzywaja czasu rzeczywistego), w klatce tylko
+opacity i pozycja y (rolling/trail), szum max ~20 Hz,
 statyczne warstwy malowane raz na zmiane ustawien (debounce), zero-cost przy
 zgaszonym zasilaniu (okna odmapowane, jak destroy()) i przy motion OFF
 (warstwy ruchome ukryte, jak .motion-off).
