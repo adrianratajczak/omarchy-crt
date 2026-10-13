@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# crt-kineskop — CLI do wtyczki Omarchy „CRT Kineskop".
+# Do keybindów Hyprland i skryptów. Przykłady:
+#   crt-kineskop toggle            # zasilanie wł/wył
+#   crt-kineskop preset heavy      # preset
+#   crt-kineskop set scan 0.6      # pojedynczy parametr (markuje custom)
+#   crt-kineskop motion off        # pauza ruchu
+#   crt-kineskop degauss           # degauss + błysk
+#   crt-kineskop status            # JSON wszystkich ustawień
+set -euo pipefail
+
+TARGET="crt.kineskop"
+cmd="${1:-status}"
+
+case "$cmd" in
+  toggle|status|reset|degauss)
+    exec omarchy-shell -q "$TARGET" "$cmd"
+    ;;
+  on)
+    exec omarchy-shell -q "$TARGET" power on
+    ;;
+  off)
+    exec omarchy-shell -q "$TARGET" power off
+    ;;
+  power|motion)
+    exec omarchy-shell -q "$TARGET" "$cmd" "${2:-toggle}"
+    ;;
+  preset)
+    exec omarchy-shell -q "$TARGET" preset "${2:-light}"
+    ;;
+  set)
+    key="${2:?użycie: crt-kineskop set <klucz> <wartość>}"
+    val="${3:?użycie: crt-kineskop set <klucz> <wartość>}"
+    exec omarchy-shell -q "$TARGET" configure "{\"$key\":$val}"
+    ;;
+  settings)
+    exec omarchy-shell -q shell toggle "$TARGET"
+    ;;
+  *)
+    echo "użycie: crt-kineskop toggle|on|off|status|preset light|heavy|set K V|motion on|off|degauss|reset|settings" >&2
+    exit 1
+    ;;
+esac
