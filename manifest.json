@@ -7,7 +7,6 @@
   "license": "MIT",
   "description": "Efekt kineskopu na froncie całego pulpitu: scanlines, aperture grille, winieta, tube glow, powidoki, flicker, rolling band, szum, aberracja i bloom.",
   "kinds": ["service", "bar-widget", "overlay"],
-  "keepLoaded": true,
   "entryPoints": {
     "service": "Service.qml",
     "barWidget": "BarWidget.qml",
