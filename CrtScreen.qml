@@ -1,13 +1,13 @@
-// CrtScreen.qml — obraz kineskopu na jednym ekranie.
-// Port kolejności warstw z CRT Wrapper:
-// grade -> chroma -> scanlines -> mask -> rolling -> persist-trail ->
-// noise -> flicker -> persist-glow -> bulge -> vignette -> tubeglow ->
-// edge-ca -> edge-smear -> bloom -> glass -> flash.
+// CrtScreen.qml — obraz kineskopu na jednym ekranie: JEDEN quad GPU.
 //
-// W klatce ruszane TYLKO opacity i y (jak w oryginale transform+opacity).
-// Statyczne gradienty maluje Canvas raz na zmianę ustawień (staticRevision).
-// Całość ma pustą maskę wejścia (ustawia okno) = klikalność jak
-// pointer-events:none w oryginale.
+// Caly efekt (16 warstw w kolejnosci z css/crt-core.css) liczy fragment
+// shader crt.frag.qsb na GPU. QML nie rusza pikseli — uniformy + czas.
+// Stad zerowy koszt CPU (poprzednie podejscie z Canvas 2D dusilo glowny
+// watek). Klikalnosc: okno ma pusta maske (ustawia Service).
+//
+// Kolejnosc uniformow w CrtScreen MUSI odpowiadac blokowi `buf` w crt.frag:
+// resolution, time, scan, mask, vig, bulge, warmth, flick, roll, noise,
+// chroma, glass, glow, persist, ca, smear, bloom, pitch, boost.
 
 import QtQuick
 import "CrtPresets.js" as CrtPresets
@@ -17,33 +17,10 @@ Item {
   property var svc: null
 
   readonly property real dpr: Screen.devicePixelRatio || 1
+  readonly property real pitchPx: CrtPresets.scanlinePitchCss(height, screen.dpr)
 
-  function reqStatic() {
-    if (!visible || !svc || !svc.powered) return;
-    staticCv.requestPaint();
-    glowCv.requestPaint();
-    bloomCv.requestPaint();
-    persistCv.requestPaint();
-  }
-
-  // Brama diagnostyczna: solo ("all"|"static"|"flicker"|"roll"|"noise"|"glow").
-  function show(group) {
-    if (!screen.svc || !screen.svc.motion) return false;
-    var s = screen.svc.solo;
-    return s === "all" || s === group;
-  }
-
-  Connections {
-    target: screen.svc
-    function onStaticRevisionChanged() { screen.reqStatic(); }
-  }
-
-  onWidthChanged: screen.reqStatic()
-  onHeightChanged: screen.reqStatic()
-  onVisibleChanged: { if (visible) screen.reqStatic(); }
-
-  // Kontener całości (degauss wobble — przybliżenie: rusza się nakładka,
-  // nie treść pod spodem; treść jest poza zasięgiem overlayu).
+  // Kontener calosci (degauss wobble — przyblizenie: rusza sie nakladka,
+  // nie tresc pod spodem; tresc jest poza zasiegiem overlayu).
   Item {
     id: layers
     anchors.fill: parent
@@ -51,7 +28,7 @@ Item {
 
     SequentialAnimation {
       id: wobbleAnim
-      running: screen.svc && screen.svc.wobbling
+      running: screen.svc ? screen.svc.wobbling : false
       PropertyAnimation { target: layers; property: "x"; from: 0; to: 9; duration: 90; easing.type: Easing.InOutQuad }
       PropertyAnimation { target: layers; property: "x"; from: 9; to: -8; duration: 130; easing.type: Easing.InOutQuad }
       PropertyAnimation { target: layers; property: "x"; from: -8; to: 4; duration: 130; easing.type: Easing.InOutQuad }
@@ -61,289 +38,29 @@ Item {
       PropertyAnimation { target: layers; property: "rotation"; to: 0; duration: 150 }
     }
 
-    // ---- grade: patrz staticCv (tint+dim baked) ----
-
-    // ---- statyczne szkło: chroma, scanlines, maska, soczewka, winieta,
-    //      krawędzie, odblask (jeden Canvas, repaint tylko na zmianę) ----
-    Canvas {
-      id: staticCv
+    // ---- caly kineskop w jednym przejsciu GPU ----
+    ShaderEffect {
       anchors.fill: parent
-      renderTarget: Canvas.FramebufferObject
-      onPaint: {
-        if (!screen.svc) return;
-        var ctx = getContext("2d");
-        var w = width, h = height;
-        var s = screen.svc;
-        ctx.clearRect(0, 0, w, h);
-
-        // grade (w baked: tint + dim; prawdziwy saturate tylko shaderem Hyprland)
-        if (s.warmth > 0.003) {
-          ctx.fillStyle = "rgba(255,179,107," + (0.10 * s.warmth).toFixed(3) + ")";
-          ctx.fillRect(0, 0, w, h);
-        }
-        if (s.vig > 0.003) {
-          ctx.fillStyle = "rgba(0,0,0," + (0.10 * s.vig).toFixed(3) + ")";
-          ctx.fillRect(0, 0, w, h);
-        }
-
-        // chroma: boczne tinty (jak .crt-chroma, op = chroma*.45)
-        var ca = s.chroma * 0.45;
-        if (ca > 0.003) {
-          var gl = ctx.createLinearGradient(0, 0, w * 0.12, 0);
-          gl.addColorStop(0, "rgba(255,60,110," + (0.08 * ca * 2).toFixed(3) + ")");
-          gl.addColorStop(1, "rgba(255,60,110,0)");
-          ctx.fillStyle = gl;
-          ctx.fillRect(0, 0, w * 0.12, h);
-          var gr = ctx.createLinearGradient(w, 0, w * 0.88, 0);
-          gr.addColorStop(0, "rgba(60,220,255," + (0.08 * ca * 2).toFixed(3) + ")");
-          gr.addColorStop(1, "rgba(60,220,255,0)");
-          ctx.fillStyle = gr;
-          ctx.fillRect(w * 0.88, 0, w * 0.12, h);
-        }
-
-        // scanlines (pitch wg reguły z dema, min 2px)
-        var pitch = CrtPresets.scanlinePitchCss(h, screen.dpr);
-        if (s.scan > 0.003 && pitch >= 2) {
-          var half = Math.max(1, Math.round(pitch / 2));
-          ctx.fillStyle = "rgba(0,0,0," + (0.55 * s.scan).toFixed(3) + ")";
-          for (var y = 0; y < h; y += pitch) ctx.fillRect(0, y, w, half);
-          ctx.fillStyle = "rgba(255,255,255," + (0.06 * s.scan).toFixed(3) + ")";
-          for (var y2 = half; y2 < h; y2 += pitch) ctx.fillRect(0, y2, w, pitch - half);
-        }
-
-        // aperture grille (monochromatyczna, okres 3px)
-        if (s.mask > 0.003) {
-          ctx.fillStyle = "rgba(0,0,0," + (0.35 * s.mask).toFixed(3) + ")";
-          for (var x = 0; x < w; x += 3) ctx.fillRect(x, 0, 1, h);
-        }
-
-        // soczewka: jasny środek, ściśnięte ciemne krawędzie (jak .crt-bulge)
-        if (s.bulge > 0.003) {
-          var rr = Math.max(w, h) * 0.62;
-          var bg = ctx.createRadialGradient(w / 2, h * 0.46, 0, w / 2, h * 0.46, rr);
-          bg.addColorStop(0, "rgba(255,255,255," + (0.06 * s.bulge).toFixed(3) + ")");
-          bg.addColorStop(0.42, "rgba(255,255,255,0)");
-          bg.addColorStop(0.74, "rgba(0,0,0," + (0.16 * s.bulge).toFixed(3) + ")");
-          bg.addColorStop(1, "rgba(0,0,0," + (0.48 * s.bulge).toFixed(3) + ")");
-          ctx.fillStyle = bg;
-          ctx.fillRect(0, 0, w, h);
-        }
-
-        // winieta (siła .35 + vig*.65 jak w oryginale)
-        var va = 0.35 + s.vig * 0.65;
-        var vg = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.72);
-        vg.addColorStop(0.42, "rgba(0,0,0,0)");
-        vg.addColorStop(0.68, "rgba(0,0,0," + (0.26 * va).toFixed(3) + ")");
-        vg.addColorStop(1, "rgba(0,0,0," + (0.72 * va).toFixed(3) + ")");
-        ctx.fillStyle = vg;
-        ctx.fillRect(0, 0, w, h);
-
-        // edge-ca: prążki R/C mocniej góra/dół (12%), słabiej boki (8%)
-        if (s.ca > 0.003) {
-          var top = ctx.createLinearGradient(0, 0, 0, h * 0.12);
-          top.addColorStop(0, "rgba(255,70,70," + (0.14 * s.ca).toFixed(3) + ")");
-          top.addColorStop(0.5, "rgba(255,70,70," + (0.04 * s.ca).toFixed(3) + ")");
-          top.addColorStop(1, "rgba(255,70,70,0)");
-          ctx.fillStyle = top;
-          ctx.fillRect(0, 0, w, h * 0.12);
-          var bot = ctx.createLinearGradient(0, h, 0, h * 0.88);
-          bot.addColorStop(0, "rgba(80,230,255," + (0.14 * s.ca).toFixed(3) + ")");
-          bot.addColorStop(0.5, "rgba(80,230,255," + (0.04 * s.ca).toFixed(3) + ")");
-          bot.addColorStop(1, "rgba(80,230,255,0)");
-          ctx.fillStyle = bot;
-          ctx.fillRect(0, h * 0.88, w, h * 0.12);
-          var lf = ctx.createLinearGradient(0, 0, w * 0.08, 0);
-          lf.addColorStop(0, "rgba(255,70,70," + (0.10 * s.ca).toFixed(3) + ")");
-          lf.addColorStop(1, "rgba(255,70,70,0)");
-          ctx.fillStyle = lf;
-          ctx.fillRect(0, 0, w * 0.08, h);
-          var rt = ctx.createLinearGradient(w, 0, w * 0.92, 0);
-          rt.addColorStop(0, "rgba(80,230,255," + (0.10 * s.ca).toFixed(3) + ")");
-          rt.addColorStop(1, "rgba(80,230,255,0)");
-          ctx.fillStyle = rt;
-          ctx.fillRect(w * 0.92, 0, w * 0.08, h);
-        }
-
-        // edge-smear: miękkie pasy wzdłuż krawędzi (gradient zamiast blur8)
-        if (s.smear > 0.003) {
-          var sa = 0.8 * s.smear;
-          var s1 = ctx.createLinearGradient(0, 0, 0, h * 0.18);
-          s1.addColorStop(0, "rgba(255,255,255," + (0.10 * sa).toFixed(3) + ")");
-          s1.addColorStop(1, "rgba(255,255,255,0)");
-          ctx.fillStyle = s1;
-          ctx.fillRect(0, 0, w, h * 0.18);
-          var s2 = ctx.createLinearGradient(0, h, 0, h * 0.82);
-          s2.addColorStop(0, "rgba(255,255,255," + (0.10 * sa).toFixed(3) + ")");
-          s2.addColorStop(1, "rgba(255,255,255,0)");
-          ctx.fillStyle = s2;
-          ctx.fillRect(0, h * 0.82, w, h * 0.18);
-          var s3 = ctx.createLinearGradient(0, 0, w * 0.12, 0);
-          s3.addColorStop(0, "rgba(255,255,255," + (0.06 * sa).toFixed(3) + ")");
-          s3.addColorStop(1, "rgba(255,255,255,0)");
-          ctx.fillStyle = s3;
-          ctx.fillRect(0, 0, w * 0.12, h);
-          var s4 = ctx.createLinearGradient(w, 0, w * 0.88, 0);
-          s4.addColorStop(0, "rgba(255,255,255," + (0.06 * sa).toFixed(3) + ")");
-          s4.addColorStop(1, "rgba(255,255,255,0)");
-          ctx.fillStyle = s4;
-          ctx.fillRect(w * 0.88, 0, w * 0.12, h);
-        }
-
-        // glass: statyczny odblask szkła (alfa * glass, jak op warstwy)
-        if (s.glass > 0.003) {
-          var gg = ctx.createRadialGradient(w * 0.3, h * 0.12, 0, w * 0.3, h * 0.12, Math.max(w, h) * 0.45);
-          gg.addColorStop(0, "rgba(255,255,255," + (0.20 * s.glass).toFixed(3) + ")");
-          gg.addColorStop(0.5, "rgba(255,255,255," + (0.05 * s.glass).toFixed(3) + ")");
-          gg.addColorStop(1, "rgba(255,255,255,0)");
-          ctx.fillStyle = gg;
-          ctx.fillRect(0, 0, w, h);
-          ctx.save();
-          ctx.translate(w / 2, h / 2);
-          ctx.rotate(-0.35);
-          var dg = ctx.createLinearGradient(-w, 0, w, 0);
-          dg.addColorStop(0.5, "rgba(255,255,255,0)");
-          dg.addColorStop(0.62, "rgba(255,255,255," + (0.13 * s.glass).toFixed(3) + ")");
-          dg.addColorStop(0.74, "rgba(255,255,255,0)");
-          ctx.fillStyle = dg;
-          ctx.fillRect(-w, -h, w * 2, h * 2);
-          ctx.restore();
-        }
-      }
-    }
-
-    // ---- rolling band (tylko y + opacity) ----
-    Rectangle {
-      visible: screen.show("roll") && screen.svc.roll > 0.01
-      width: parent.width
-      height: parent.height * 2.2
-      y: (-1.1 + (screen.svc ? screen.svc.rollPos : -0.3) * 2.2) * parent.height
-      opacity: screen.svc ? screen.svc.rollOp : 0
-      gradient: Gradient {
-        orientation: Gradient.Vertical
-        GradientStop { position: 0.0; color: "transparent" }
-        GradientStop { position: 0.42; color: Qt.rgba(1, 1, 1, 0.09) }
-        GradientStop { position: 0.50; color: Qt.rgba(1, 1, 1, 0.16) }
-        GradientStop { position: 0.58; color: Qt.rgba(1, 1, 1, 0.09) }
-        GradientStop { position: 1.0; color: "transparent" }
-      }
-    }
-
-    // ---- smuga powidoku: opóźniona kopia pasma (lag 0.12 jak w oryginale) ----
-    Rectangle {
-      visible: screen.show("roll")
-      width: parent.width
-      height: parent.height * 2.2
-      y: (-1.1 + ((screen.svc ? screen.svc.rollPos : -0.3) - 0.12) * 2.2) * parent.height
-      opacity: screen.svc ? screen.svc.trailOp : 0
-      gradient: Gradient {
-        orientation: Gradient.Vertical
-        GradientStop { position: 0.0; color: "transparent" }
-        GradientStop { position: 0.42; color: Qt.rgba(1, 0.84, 0.59, 0.07) }
-        GradientStop { position: 0.50; color: Qt.rgba(1, 0.84, 0.59, 0.13) }
-        GradientStop { position: 0.58; color: Qt.rgba(1, 0.84, 0.59, 0.07) }
-        GradientStop { position: 1.0; color: "transparent" }
-      }
-    }
-
-    // ---- szum fosforu: 192x108, max ~24 Hz (jak drawNoise co 42 ms) ----
-    Canvas {
-      id: noiseCv
-      anchors.fill: parent
-      canvasSize: Qt.size(192, 108)
-      visible: screen.show("noise") && screen.svc.noise > 0.01
-      opacity: screen.svc ? screen.svc.noiseOp : 0
-      onPaint: {
-        if (!screen.svc) return;
-        var ctx = getContext("2d");
-        var img = ctx.createImageData(192, 108);
-        var d = img.data;
-        var a = Math.round(28 + screen.svc.noise * 60);
-        for (var i = 0; i < d.length; i += 4) {
-          var v = (Math.random() * 255) | 0;
-          d[i] = v; d[i + 1] = v; d[i + 2] = v; d[i + 3] = a;
-        }
-        ctx.putImageData(img, 0, 0);
-      }
-    }
-    Timer {
-      interval: 50
-      repeat: true
-      running: noiseCv.visible && screen.visible
-      onTriggered: noiseCv.requestPaint()
-    }
-
-    // ---- flicker: biała warstwa, tylko opacity ----
-    Rectangle {
-      anchors.fill: parent
-      color: "white"
-      visible: screen.show("flicker") && screen.svc.flick > 0.01
-      opacity: screen.svc ? screen.svc.flickerOp : 0
-    }
-
-    // ---- powidok pełnoekranowy (ciepła poświata, opacity ze scroll-decay) ----
-    Canvas {
-      id: persistCv
-      anchors.fill: parent
-      canvasSize: Qt.size(480, 270)
-      visible: screen.show("glow")
-      opacity: screen.svc ? screen.svc.persistOp : 0
-      onPaint: {
-        var ctx = getContext("2d");
-        var w = 480, h = 270;
-        ctx.clearRect(0, 0, w, h);
-        var g = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w * 0.55);
-        g.addColorStop(0, "rgba(255,196,120,0.14)");
-        g.addColorStop(0.45, "rgba(255,170,90,0.06)");
-        g.addColorStop(0.7, "rgba(255,170,90,0)");
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, w, h);
-      }
-    }
-
-    // ---- tube glow: poświata lampy (reuse wolnej fali — tu via glowOp) ----
-    Canvas {
-      id: glowCv
-      anchors.fill: parent
-      canvasSize: Qt.size(480, 270)
-      visible: screen.show("glow")
-      opacity: screen.svc ? screen.svc.glowOp : 0
-      onPaint: {
-        var ctx = getContext("2d");
-        var w = 480, h = 270;
-        ctx.clearRect(0, 0, w, h);
-        var g = ctx.createRadialGradient(w / 2, h * 0.48, 0, w / 2, h * 0.48, w * 0.42);
-        g.addColorStop(0, "rgba(255,196,120,0.10)");
-        g.addColorStop(0.38, "rgba(255,178,102,0.05)");
-        g.addColorStop(0.62, "rgba(255,178,102,0)");
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, w, h);
-        var e = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w * 0.62);
-        e.addColorStop(0.68, "rgba(255,170,90,0)");
-        e.addColorStop(0.88, "rgba(255,170,90,0.07)");
-        e.addColorStop(1, "rgba(255,150,70,0.12)");
-        ctx.fillStyle = e;
-        ctx.fillRect(0, 0, w, h);
-      }
-    }
-
-    // ---- namiastka bloom ----
-    Canvas {
-      id: bloomCv
-      anchors.fill: parent
-      canvasSize: Qt.size(480, 270)
-      visible: screen.show("glow")
-      opacity: screen.svc ? screen.svc.bloomOp : 0
-      onPaint: {
-        var ctx = getContext("2d");
-        var w = 480, h = 270;
-        ctx.clearRect(0, 0, w, h);
-        var g = ctx.createRadialGradient(w / 2, h * 0.46, 0, w / 2, h * 0.46, w * 0.5);
-        g.addColorStop(0, "rgba(255,220,170,0.12)");
-        g.addColorStop(0.45, "rgba(255,200,150,0.05)");
-        g.addColorStop(0.7, "rgba(255,200,150,0)");
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, w, h);
-      }
+      property vector2d resolution: Qt.vector2d(width, height)
+      property real time: screen.svc ? screen.svc.time : 0
+      property real scan: screen.svc ? screen.svc.scan : 0
+      property real mask: screen.svc ? screen.svc.mask : 0
+      property real vig: screen.svc ? screen.svc.vig : 0
+      property real bulge: screen.svc ? screen.svc.bulge : 0
+      property real warmth: screen.svc ? screen.svc.warmth : 0
+      property real flick: screen.svc ? screen.svc.flick : 0
+      property real roll: screen.svc ? screen.svc.roll : 0
+      property real noise: screen.svc ? screen.svc.noise : 0
+      property real chroma: screen.svc ? screen.svc.chroma : 0
+      property real glass: screen.svc ? screen.svc.glass : 0
+      property real glow: screen.svc ? screen.svc.glow : 0
+      property real persist: screen.svc ? screen.svc.persist : 0
+      property real ca: screen.svc ? screen.svc.ca : 0
+      property real smear: screen.svc ? screen.svc.smear : 0
+      property real bloom: screen.svc ? screen.svc.bloom : 0
+      property real pitch: screen.pitchPx
+      property real boost: screen.svc ? screen.svc.degaussBoost : 0
+      fragmentShader: "crt.frag.qsb"
     }
 
     // ---- flash (degauss / power) ----
@@ -353,7 +70,7 @@ Item {
       opacity: screen.svc ? screen.svc.flashOp : 0
     }
 
-    // ---- power-off: czern + collapse do białej linii (jak .is-off) ----
+    // ---- power-off: czern + collapse do bialej linii (jak .is-off) ----
     Rectangle {
       anchors.fill: parent
       color: "black"
@@ -382,6 +99,4 @@ Item {
       }
     }
   }
-
-  Component.onCompleted: reqStatic()
 }

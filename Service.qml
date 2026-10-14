@@ -1,16 +1,15 @@
-// Service.qml — crt.kineskop: silnik efektu kineskopu na froncie pulpitu.
+// Service.qml — crt.kineskop: kineskop na froncie pulpitu.
 //
-// Port logiki extension/content.js + js/crt-engine.js + crt-overlay.js:
-// jedna pętla FrameAnimation, w klatce ruszane TYLKO opacity i y warstw
-// (rolling/trail) — scanlines/maska/winieta/krawędzie to statyczny Canvas
-// malowany raz na zmianę ustawień. Szum: Canvas 192x108, max ~24 Hz.
-// Pauza: okna są odmapowane przy zgaszonym zasilaniu (zero-cost, jak
-// destroy() w oryginale); motion OFF chowa warstwy ruchome (jak .motion-off).
+// Architektura: caly efekt liczy JEDEN fragment shader GPU na ekran
+// (CrtScreen + crt.frag.qsb). QML nie rusza pikseli — serwis trzyma stan,
+// persistencje, zasilanie i czas; uniformy aktualizuja sie same.
+// Koszt CPU ~0 (poprzednie podejscie z Canvas 2D dusilo glowny watek).
 //
 // Ustawienia: ~/.local/state/omarchy/crt-kineskop/config.json (poza katalogiem
-// wtyczki, żeby zapis nie przeładowywał wtyczki — wzorowane na auto-workspace).
-// Serwis jest jedynym pisarzem; widget i overlay czytają ten sam plik
-// (FileView + watchChanges) i piszą wyłącznie przez IPC.
+// wtyczki, zeby zapis nie przeladowywal wtyczki). Serwis jest jedynym pisarzem;
+// widget i overlay czytaja ten sam plik (FileView + watchChanges) i pisza
+// wylacznie przez IPC. Okna: przezroczyste PanelWindow na kazdym ekranie
+// z pusta maska wejscia (= klikalnosc jak pointer-events:none w oryginale).
 
 import QtQuick
 import Quickshell
@@ -51,51 +50,14 @@ Item {
   property real smear: 0.3
   property real bloom: 0.3
 
-  // ---------------- stan silnika (klatka) ----------------
-  property real rollPos: -0.3
-  property real persistV: 0
-  property real slowWave: 0.5
-  property real flickerOp: 0
-  property real rollOp: 0.25
-  property real trailOp: 0.1
-  property real glowOp: 0.35
-  property real bloomOp: 0.16
-  property real persistOp: 0.05
-  property real noiseOp: 0.09
-  property real lastT: 0
-  property int staticRevision: 0
+  // ---------------- stan zycia ----------------
+  property real time: 0
+  property real degaussBoost: 0
   property bool dying: false
   property real flashOp: 0
   property bool wobbling: false
   property string lastWritten: ""
   property int loadFails: 0
-  // Diagnostyka/wydajnosc: solo ogranicza widoczne warstwy ("all", "static",
-  // "flicker", "roll", "noise", "glow"). Sesyjne, nie persistowane.
-  property string solo: "all"
-
-  // Ponawianie odczytu zamiast slepego zapisu defaultow: przy duszacej sie
-  // petli / goracym przeladowaniu pierwszy odczyt moze nie wyjsc, a zapis
-  // defaultow (enabled:true) skasowalby swiadoma decyzje uzytkownika.
-  Timer {
-    id: loadRetry
-    interval: 500
-    repeat: false
-    onTriggered: cfgView.reload()
-  }
-
-  function writeDefaults() {
-    var d = {
-      enabled: true, motion: true, preset: "light"
-    };
-    for (var k in CrtPresets.DEFAULTS) {
-      if (d[k] === undefined) d[k] = CrtPresets.DEFAULTS[k];
-    }
-    var json = JSON.stringify(d);
-    root.lastWritten = json;
-    root.applyPatch(d);
-    root.presetName = "light";
-    cfgView.setText(json);
-  }
 
   function snapshot() {
     return {
@@ -110,16 +72,13 @@ Item {
 
   function applyPatch(patch) {
     var clean = CrtPresets.sanitized(patch);
-    var touchedStatic = false;
-    for (var k in clean) {
-      if (root[k] !== clean[k]) {
-        root[k] = clean[k];
-        touchedStatic = true;
-      }
+    for (var k in clean) root[k] = clean[k];
+    if (patch.enabled !== undefined) {
+      var want = !!patch.enabled;
+      if (want && !root.powered) root.powerOn();
+      else if (!want && root.powered) root.powerOff();
     }
-    if (patch.enabled !== undefined) root.powered = !!patch.enabled;
     if (patch.motion !== undefined) root.motion = !!patch.motion;
-    if (touchedStatic) bumpStaticSoon();
   }
 
   function markCustom() {
@@ -131,7 +90,6 @@ Item {
     var p = CrtPresets.PRESETS[name];
     for (var k in p) root[k] = p[k];
     root.presetName = name;
-    bumpStaticSoon();
     saveSoon();
     return "ok";
   }
@@ -139,7 +97,8 @@ Item {
   function resetAll() {
     var keepPower = root.powered, keepMotion = root.motion;
     setPreset("light");
-    root.powered = keepPower;
+    if (!keepPower && root.powered) root.powerOff();
+    if (keepPower && !root.powered) root.powerOn();
     root.motion = keepMotion;
     return "ok";
   }
@@ -161,67 +120,30 @@ Item {
     root.dying = false;
     root.powered = true;
     saveSoon();
-    root.persistV = Math.min(1.2, root.persistV + 0.5);
-    root.flashOp = 0.5; // rozbłysk włączenia jak w demie (turn-on)
+    root.flashOp = 0.5; // rozblysk wlaczenia jak w demie (turn-on)
     flashFade.duration = 550;
     flashFade.restart();
   }
 
   function degauss() {
     if (!root.powered || root.dying) return "off";
-    root.persistV = Math.min(1.2, root.persistV + 0.8); // poświata jak fosfor
+    root.degaussBoost = 0.8; // dopalacz fosforu jak persistV += 0.8 w silniku
     root.wobbling = true;
     wobbleTimer.restart();
+    degaussRestore.restart();
     root.flashOp = 0.7;
     flashFade.duration = 500;
     flashFade.restart();
     return "ok";
   }
 
-  // ---------------- pętla silnika (port loop() z crt-engine.js) ----------------
-  function tick() {
-    var now = Date.now();
-    if (!root.lastT) root.lastT = now;
-    var dtMs = Math.min(100, now - root.lastT);
-    root.lastT = now;
-    var dt = dtMs / 1000;
-    var t = now / 1000;
-
-    if (root.roll > 0.01) {
-      root.rollPos += dt * 0.07 * (0.4 + root.roll);
-      if (root.rollPos > 1.35) root.rollPos = -0.35;
-    }
-    root.rollOp = root.roll * 0.5;
-    root.trailOp = root.persist * 0.35;
-
-    var fast = Math.sin(t * 720.0) * 0.5 + Math.sin(t * 631.0 + 1.7) * 0.5;
-    var slow = Math.sin(t * 7.3) * 0.5 + 0.5; // ta sama fala dla glow/bloom
-    root.slowWave = slow;
-    root.flickerOp = root.flick > 0.01
-      ? Math.max(0, root.flick * (0.012 + 0.010 * fast + 0.014 * slow)) : 0;
-    root.glowOp = root.glow * (0.75 + 0.25 * slow);
-
-    root.persistV *= Math.pow(0.92, dtMs / 16.7);
-    // Adaptacja na pulpit: brak sygnału prędkości scrolla, więc fosfor
-    // minimalnie oddycha zamiast gasnąć do zera (degauss i tak go podbija).
-    root.persistV = Math.max(root.persistV, 0.06 + 0.05 * slow);
-
-    root.bloomOp = Math.max(0,
-      root.bloom * (0.55 + 0.30 * slow + 0.4 * Math.min(1, root.persistV)));
-    root.persistOp = Math.max(0,
-      root.persist * (0.18 + Math.min(1, root.persistV) * 0.5));
-    root.noiseOp = root.noise * 0.35;
-  }
-
-  // Petla silnika 30 fps (zamiast FrameAnimation): pelnoekranowy overlay
-  // przerysowywany co klatke to glowny koszt; 30 fps wystarcza dla fosforu,
-  // a formuly uzywaja czasu rzeczywistego, wiec sa poprawne przy kazdym tempie.
+  // ---------------- czas shadera (jedyna praca na klatke: jedna liczba) ----------------
   Timer {
     id: engine
     interval: 33
     repeat: true
     running: root.powered && root.motion && !root.dying
-    onTriggered: root.tick()
+    onTriggered: root.time += 0.033
   }
 
   NumberAnimation {
@@ -251,6 +173,13 @@ Item {
     onTriggered: root.wobbling = false
   }
 
+  Timer {
+    id: degaussRestore
+    interval: 600
+    repeat: false
+    onTriggered: root.degaussBoost = 0
+  }
+
   // ---------------- persystencja ----------------
   FileView {
     id: cfgView
@@ -262,15 +191,37 @@ Item {
     }
     onLoadFailed: function(err) {
       // Brak pliku (pierwszy start) albo przejsciowy blad IO — sprobuj
-      // jeszcze kilka razy zanim utworzysz defaulty.
+      // jeszcze kilka razy zanim utworzysz defaulty (zapis defaultow
+      // z enabled:true skasowalby swiadoma decyzje uzytkownika).
       if (root.loadFails++ < 5) loadRetry.restart();
       else root.writeDefaults();
     }
     onFileChanged: cfgView.reload()
     onSaveFailed: function(err) {
-      console.warn("[crt] zapis ustawień nieudany: " + err);
+      console.warn("[crt] zapis ustawien nieudany: " + err);
       root.lastWritten = ""; // sprobuj ponownie przy nastepnym zapisie
     }
+  }
+
+  Timer {
+    id: loadRetry
+    interval: 500
+    repeat: false
+    onTriggered: cfgView.reload()
+  }
+
+  function writeDefaults() {
+    var d = {
+      enabled: true, motion: true, preset: "light"
+    };
+    for (var k in CrtPresets.DEFAULTS) {
+      if (d[k] === undefined) d[k] = CrtPresets.DEFAULTS[k];
+    }
+    var json = JSON.stringify(d);
+    root.lastWritten = json;
+    root.applyPatch(d);
+    root.presetName = "light";
+    cfgView.setText(json);
   }
 
   function applyFile(text) {
@@ -279,16 +230,13 @@ Item {
     try {
       obj = JSON.parse(text);
     } catch (e) {
-      console.warn("[crt] uszkodzony config.json, ignoruję");
+      console.warn("[crt] uszkodzony config.json, ignoruje");
       return;
     }
     root.lastWritten = text;
-    var hadPower = root.powered;
     root.applyPatch(obj || {});
     if (obj.preset === "light" || obj.preset === "heavy" || obj.preset === "custom")
       root.presetName = obj.preset;
-    // Zmiana zasilania z zewnątrz (np. ręczna edycja pliku).
-    if (root.powered && !hadPower) root.powerOn();
   }
 
   Timer {
@@ -307,17 +255,6 @@ Item {
     if (json === root.lastWritten) return;
     root.lastWritten = json;
     cfgView.setText(json);
-  }
-
-  Timer {
-    id: staticTimer
-    interval: 120
-    repeat: false
-    onTriggered: root.staticRevision++
-  }
-
-  function bumpStaticSoon() {
-    staticTimer.restart();
   }
 
   Process {
@@ -352,7 +289,6 @@ Item {
       } catch (e) {
         return "bad-json";
       }
-      if (patch.solo !== undefined) root.solo = String(patch.solo);
       root.applyPatch(patch || {});
       root.markCustom();
       root.saveSoon();
@@ -373,7 +309,7 @@ Item {
       anchors { top: true; bottom: true; left: true; right: true }
       color: "transparent"
       exclusionMode: ExclusionMode.Ignore
-      // Pusta maska = klikalność jak pointer-events:none w oryginale.
+      // Pusta maska = klikalnosc jak pointer-events:none w oryginale.
       mask: Region {}
       WlrLayershell.namespace: "crt-kineskop"
       WlrLayershell.layer: WlrLayer.Overlay
@@ -387,7 +323,6 @@ Item {
   }
 
   Component.onCompleted: {
-    root.lastT = Date.now();
     mkdirProc.running = true;
     console.log("[crt] kineskop start");
   }
