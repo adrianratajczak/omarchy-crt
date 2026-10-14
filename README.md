@@ -8,24 +8,28 @@ brzegowa, bloom, odblask szkla, power on/off, degauss, presety light/heavy/custo
 Wszystko jako przezroczysta, klikalna warstwa nad calym pulpitem
 (Hyprland, wszystkie monitory).
 
-## Jak to dziala
+## Architektura (dlaczego tak)
 
-Wtyczka to `service` (silnik + okna) + `bar-widget` (przelacznik) + `overlay`
-(panel ustawien). Serwis mapuje na kazdym ekranie jedno `PanelWindow`
-(warstwa Overlay, pusta maska wejscia: klikniecia przechodza pod spod, jak
-`pointer-events: none` w oryginale) i rysuje w nim warstwy w oryginalnej kolejnosci:
+Caly efekt liczy **jeden fragment shader GPU na ekran** (`crt.frag` ->
+`crt.frag.qsb` przez `qsb`, 16 warstw w kolejnosci z `css/crt-core.css`,
+mieszanie zwykla alfa jak wtyczka MV3). QML nie rusza pikseli: serwis trzyma
+stan i czas, uniformy aktualizuja sie same. Koszt: ~+10% rdzenia wzgledem
+spoczynku powloki, IPC zawsze responsywne.
 
-grade -> chroma -> scanlines -> mask -> rolling -> persist-trail -> noise (192x108)
--> flicker -> persist-glow -> bulge -> vignette -> tubeglow -> edge-ca -> edge-smear
--> bloom -> glass -> flash
+Czego plugin **celowo nie robi** (sprawdzone na zywca, wszystko mierzone):
 
-Zasady wydajnosci z oryginalu, dostrojone do pulpitu: jedna petla
-(Timer 30 fps — pelnoekranowy repaint co klatke to glowny koszt, a 30 fps
-wystarcza dla fosforu; formuly uzywaja czasu rzeczywistego), w klatce tylko
-opacity i pozycja y (rolling/trail), szum max ~20 Hz,
-statyczne warstwy malowane raz na zmiane ustawien (debounce), zero-cost przy
-zgaszonym zasilaniu (okna odmapowane, jak destroy()) i przy motion OFF
-(warstwy ruchome ukryte, jak .motion-off).
+- **Canvas 2D w QML** — pierwsze podejscie (12 warstw, ta sama matematyka
+  co w oryginale) dusilo glowny watek pod ~100% i zabijalo IPC. Winny byl
+  raster CPU canvasow, nie GPU. Usuniete w calosci.
+- **Animowany screen-shader Hyprland (`uniform time`)** — dziala i kosztuje
+  ~0 CPU, ale Hyprland pokazuje wtedy nieusuwalny baner ostrzezenia przy
+  KAZDEJ aplikacji (`seterror disable`, `dismissnotify`, `error_limit`,
+  `error_position` — wszystko przetestowane, baner zostaje). Nie do przyjecia
+  w codziennym przelaczniku. Wtyczka nie dotyka `screen_shader` w ogole.
+- Statyczny shader (`hypr/crt-grade.frag`, bez `time`) jest czysty: zero
+  banerow, damage tracking wlaczony, ~0 kosztu. Daje PRAWDZIWY grade
+  (saturacja/cieplo/jasnosc na pikselach), ktorego overlay z natury nie umie
+  (lezy NAD trescia). Opcjonalny kompan — szczegoly nizej.
 
 ## Instalacja
 
@@ -34,61 +38,80 @@ omarchy plugin add https://github.com/TWOJ-USER/omarchy-crt --enable
 ```
 
 Bez `--enable` wtyczka laduje nieaktywna: mozesz najpierw przeczytac kod
-(`~/.config/omarchy/plugins/crt.kineskop/`), potem `omarchy plugin enable crt.kineskop`.
-Wtyczka nie ma hookow instalacyjnych i nie prosi o sudo (standard Omarchy).
+(`~/.config/omarchy/plugins/crt.kineskop/`), potem
+`omarchy plugin enable crt.kineskop`. Wtyczka nie ma hookow instalacyjnych
+i nie prosi o sudo (standard Omarchy). Wazne: `add`/`update` klonuja przez
+git — commituj zmiany przed `update`, inaczej nie dojda do powloki.
 
-Widget `CRT Kineskop` dokladasz na bar jak kazdy widget (domyslnie sekcja prawa).
+Widget `CRT Kineskop` dokladasz na bar jak kazdy widget (domyslnie sekcja
+prawa). Uwaga: przy zamiennikowym barze (nie `omarchy.bar`) widget moze sie
+nie wyswietlic — to standardowe ograniczenie platformy, serwis i overlay
+dzialaja tak samo (przetestowane w izolacji: widget renderuje `◉ CRT`).
 
 ## Uzycie
 
-- Bar: `CRT` z kropka — LPM: panel ustawien, PPM: zasilanie, SPM: degauss.
+- Bar: `◉/○ CRT` — LPM: panel ustawien, PPM: zasilanie, SPM: degauss.
 - Panel ustawien (tez: `omarchy-shell -q shell toggle crt.kineskop`): presety
-  Light/Heavy/Custom, przelacznik ruchu, 16 suwakow (te same zakresy co popup MV3),
-  Degauss, Reset. Suwak z automatu przelacza preset na custom (jak w oryginale).
-- CLI (`bin/crt-kineskop`, dowiąz do ~/.local/bin albo keybindy):
+  Light/Heavy/Custom, przelacznik ruchu, 16 suwakow (te same zakresy co popup
+  MV3), Degauss, Reset. Suwak z automatu przelacza preset na custom.
+- CLI (`bin/crt-kineskop`, dowiąz do `~/.local/bin` albo keybindy):
   `toggle|on|off|status|preset light|heavy|set scan 0.6|motion on|off|degauss|reset|settings`.
 
-Przykladowe keybindy (`~/.config/hypr/hyprland.conf`):
+Przykladowe keybindy (`~/.config/hypr/bindings.lua`, skladnia Omarchy):
 
-```ini
-bindd = SUPER SHIFT, C, kineskop on/off, exec, ~/.local/bin/crt-kineskop toggle
-bindd = SUPER SHIFT, D, kineskop degauss, exec, ~/.local/bin/crt-kineskop degauss
-bindd = SUPER SHIFT, S, kineskop settings, exec, ~/.local/bin/crt-kineskop settings
+```lua
+o.bind("SUPER + SHIFT + C", "Kineskop on/off", "crt-kineskop toggle")
+o.bind("SUPER + SHIFT + D", "Kineskop degauss", "crt-kineskop degauss")
 ```
+
+(Uwaga: powyzsze wymaga `crt-kineskop` w PATH.)
 
 Ustawienia zyja w `~/.local/state/omarchy/crt-kineskop/config.json`
-(serwis jest jedynym pisarzem; widget i panel czytaja na zywo).
+(serwis jest jedynym pisarzem; widget i panel czytaja na zywo; zapis ma
+retry, zeby nie skasowac decyzji uzytkownika przy przejsciowym bledzie IO).
 
-## Opcjonalnie: prawdziwy grade shaderem Hyprland
+## Opcjonalnie: prawdziwy grade statycznym shaderem
 
-Overlay lezy NAD trescia, wiec nie umie naprawde zmienic saturacji/jasnosci
-pikseli pod spodem (w wersji webowej robil to backdrop-filter na warstwie grade).
-`hypr/crt-grade.frag` robi PRAWDZIWY grade na poziomie kompozytora
-(cieplo + saturacja + jasnosc + winieta + scanlines):
+Overlay nie zmieni saturacji pikseli pod spodem. `hypr/crt-grade.frag`
+(format GLES3 `#version 300 es`, jak shadery hyprshade; statyczny =
+bez banerow) robi to na poziomie kompozytora:
 
 ```sh
-hyprctl keyword decoration:screen_shader "/sciezka/do/crt-grade.frag"
-hyprctl keyword decoration:screen_shader ""  # wylaczenie
+hyprctl eval 'hl.config({ decoration = { screen_shader = "/sciezka/do/crt-grade.frag" } })'
+hyprctl eval 'hl.config({ decoration = { screen_shader = "" } })'  # wylaczenie
 ```
 
-Jesli shader jest wlaczony, w ustawieniach wtyczki skrec scanlines i winiete
-do 0 (zeby nie dublowac). Parametry stroisz #define na gorze pliku.
+Jesli wlaczony, skrec saturacje/cieplo w ustawieniach wtyczki (inaczej licza
+sie podwojnie). Parametry stroisz stalymi na gorze pliku.
 
 ## Uczciwe roznice vs wersja webowa
 
 | Web (CRT Wrapper) | Omarchy (ta wtyczka) |
 |---|---|
-| backdrop-filter grade (sat/sepia/brightness) | przyblizenie tintem; pelny grade tylko shaderem Hyprland |
-| mix-blend-mode (multiply/screen/overlay) | zwykle alfy (jak w wersji Shadow/MV3, z tego samego powodu) |
+| backdrop-filter grade (sat/sepia/brightness) | przyblizenie tintem w shaderze QML; pelny grade tylko kompanem Hyprland |
+| mix-blend-mode (multiply/screen/overlay) | zwykla alfa (jak wtyczka MV3, z tego samego powodu) |
 | geometria beczki SVG feDisplacementMap | tylko cien soczewki (jak wtyczka MV3) |
 | promien obudowy `curve`, skiny TV | brak (pulpit nie ma obudowy) |
-| powidoki z predkosci scrolla | fosfor minimalnie oddycha + boost przy degauss (brak sygnalu scrolla) |
-| smuga z blur(8px) | gradientowa (tansza, bez blur na fullscreen) |
-| szum Canvas gladko skalowany | j.w. (lekko miekszy niz pixelated na LCD) |
-| per-domena on/off | brak (nie dotyczy pulpitu) |
+| powidoki z predkosci scrolla | fosfor minimalnie oddycha + boost przy degauss |
+| smuga z blur(8px) | gradientowa (tansza) |
+| animacja 120 FPS, szum 24 Hz | uniform `time` 30 FPS, szum 20 Hz (formuly czasu rzeczywistego — poprawne) |
 
-Silnik klatki (fale sin, decay 0.92, lag smugi 0.12, predkosc roll 0.07,
-progi pitch, presety, zakresy suwakow) przeniesiony 1:1.
+Silnik klatki (fale sin 720/631/7.3, decay 0.92, lag smugi 0.12, predkosc
+roll 0.07, progi pitch, presety, zakresy suwakow) przeniesiony 1:1 —
+tylko wykonanie jest na GPU zamiast w DOM.
+
+## Pliki
+
+| Plik | Rola |
+|---|---|
+| `manifest.json` | kontrakt wtyczki: service + bar-widget + overlay |
+| `Service.qml` | stan, persistencja, zasilanie/degauss, czas, okna, IPC |
+| `CrtScreen.qml` | jeden ShaderEffect na ekran + flash/power/wobble |
+| `crt.frag` / `crt.frag.qsb` | zrodlo GLSL (Vulkan-style) / skompilowany shader (qsb `--glsl "100 es,300 es,330"`) |
+| `CrtPresets.js` | DEFAULTS + PRESETS + pitch + definicje suwakow |
+| `BarWidget.qml` / `Overlay.qml` / `CrtSettingsForm.qml` | przelacznik, panel, formularz |
+| `bin/crt-kineskop` | CLI do keybindow |
+| `hypr/crt-grade.frag` | opcjonalny statyczny grade kompozytora |
 
 ## REGULA SYNC (port oryginalnej reguly)
 
@@ -96,20 +119,32 @@ Trzy miejsca musza miec identyczne klucze i wartosci presetow:
 
 1. `CrtPresets.js` (DEFAULTS, PRESETS, SETTING_DEFS)
 2. `Service.qml` (domyslne wartosci properties)
-3. `CrtSettingsForm.qml` (fallbacki) + `hypr/crt-grade.frag` (#define)
+3. `crt.frag` (kolejnosc uniformow == kolejnosc properties w CrtScreen!)
+
+Po zmianie `crt.frag` przekompiluj: `qsb --glsl "100 es,300 es,330" -o crt.frag.qsb crt.frag`
+(`qsb` jest w `/usr/lib/qt6/bin/`).
 
 ## Testowanie
 
 1. `omarchy plugin validate ./omarchy-crt` — czysty raport.
 2. `node --check CrtPresets.js`.
-3. Po enable: suwak scan — linie rowne, pitch jak w demie; winieta w rogach.
-4. PPM na widget — czern + collapse do linii (~0.4 s), potem zero okien.
+3. Suwak scan — rowne linie, pitch liczony z wysokosci ekranu x DPR.
+4. PPM na widget — czern + collapse do linii (~0.4 s), potem zero okien (`hyprctl layers`).
 5. Degauss — blysk + wobble + podbicie poswiaty.
-6. motion OFF — brak rolling/flicker/noise; statyczny glow zostaje.
-7. Podmiana monitora / resize — overlay wraca sam na wszystkich ekranach.
+6. motion OFF — zamrozona klatka (time stoi).
+7. Obciazenie: overlay ~+10% rdzenia wzgledem spoczynku, IPC responsywne.
 8. `crt-kineskop status` — JSON wszystkich ustawien.
+
+## Rozwiazywanie problemow
+
+- Pulpt zamula / IPC nie odpowiada: `omarchy-restart-shell` (swieza instancja
+  leczy kazdy stan zdegenerowany; efekt wraca z pliku przy starcie).
+- Widgetu nie ma na barze: masz zamiennikowy bar — przelacz chwilowo na
+  `omarchy.bar` albo uzywaj CLI/overlayu.
+- Efektu nie widac mimo `power on`: sprawdz `hyprctl layers | grep crt-kineskop`
+  i `crt-kineskop status`.
 
 ## Podziekowania
 
 Caly efekt, parametry i charakterystyka: Adrian Ratajczak, projekt CRT Wrapper.
-Ten port tylko tlumaczy jego silnik na QML/Quickshell.
+Ten port tlumaczy jego silnik na QML/Quickshell + RHI.
