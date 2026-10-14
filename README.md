@@ -48,6 +48,27 @@ prawa). Uwaga: przy zamiennikowym barze (nie `omarchy.bar`) widget moze sie
 nie wyswietlic — to standardowe ograniczenie platformy, serwis i overlay
 dzialaja tak samo (przetestowane w izolacji: widget renderuje `◉ CRT`).
 
+## Usuwanie
+
+```sh
+omarchy plugin remove crt.kineskop
+```
+
+Usuwa kod wtyczki i wpis z `shell.json`. Opcjonalnie posprzataj tez zapisane
+ustawienia (wroca domyslne przy ponownej instalacji):
+
+```sh
+rm -rf ~/.local/state/omarchy/crt-kineskop
+```
+
+## Zaleznosci i licencja
+
+Brak zewnetrznych zaleznosci (tylko moduly Quickshella i wbudowane
+singletony Omarchy `qs.Commons` / `qs.Ui`). Wtyczka nie instaluje hookow,
+nie prosi o sudo i nie nadpisuje zadnej konfiguracji uzytkownika — wlasne
+ustawienia trzyma w osobnym pliku w `~/.local/state` (powyzej). Licencja:
+MIT (`LICENSE`). Efekt i parametry: Adrian Ratajczak, projekt CRT Wrapper.
+
 ## Uzycie
 
 - Bar: `◉/○ CRT` — LPM: panel ustawien, PPM: zasilanie, SPM: degauss.
