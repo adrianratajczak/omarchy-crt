@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "adrianratajczak",
   "license": "MIT",
-  "description": "Efekt kineskopu na froncie całego pulpitu: scanlines, aperture grille, winieta, tube glow, powidoki, flicker, rolling band, szum, aberracja i bloom.",
+  "description": "CRT effect across the whole desktop: scanlines, aperture grille, vignette, tube glow, phosphor trails, flicker, rolling band, noise, chromatic aberration and bloom. / Efekt kineskopu na froncie calego pulpitu: scanlines, aperture grille, winieta, tube glow, powidoki, flicker, rolling band, szum, aberracja i bloom.",
   "preview": "preview.png",
   "kinds": ["service", "bar-widget", "overlay"],
   "entryPoints": {
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "CRT Kineskop",
-    "description": "Przełącznik efektu kineskopu (L: ustawienia, P: wł/wył, Ś: degauss)",
+    "description": "CRT effect switch (Left: settings, Right: on/off, Middle: degauss) / Przelacznik efektu kineskopu (L: ustawienia, P: wl/wyl, S: degauss)",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right"

@@ -281,7 +281,7 @@ Column {
   Text {
     width: parent.width
     wrapMode: Text.WordWrap
-    text: "Skrót: omarchy-shell crt.kineskop toggle · bin/crt-kineskop do keybindów Hyprland."
+    text: "Shortcut: omarchy-shell crt.kineskop toggle · bin/crt-kineskop for Hyprland keybinds. / Skrot: omarchy-shell crt.kineskop toggle · bin/crt-kineskop do keybindow Hyprland."
     color: Commons.Color.menu.text
     opacity: 0.55
     font.family: Style.font.family

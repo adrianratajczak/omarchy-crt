@@ -44,7 +44,7 @@ BarWidget {
     bar: root.bar
     text: root.powered ? "◉ CRT" : "○ CRT"
     active: root.powered
-    tooltipText: "CRT Kineskop — L: ustawienia · P: wł/wył · Ś: degauss"
+    tooltipText: "CRT Kineskop — Left: settings · Right: on/off · Middle: degauss / L: ustawienia · P: wl/wyl · S: degauss"
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.LeftButton) {
         Quickshell.execDetached(["omarchy-shell", "-q", "shell", "toggle", root.pluginId]);
