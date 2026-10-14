@@ -26,6 +26,13 @@ Item {
     persistCv.requestPaint();
   }
 
+  // Brama diagnostyczna: solo ("all"|"static"|"flicker"|"roll"|"noise"|"glow").
+  function show(group) {
+    if (!screen.svc || !screen.svc.motion) return false;
+    var s = screen.svc.solo;
+    return s === "all" || s === group;
+  }
+
   Connections {
     target: screen.svc
     function onStaticRevisionChanged() { screen.reqStatic(); }
@@ -206,7 +213,7 @@ Item {
 
     // ---- rolling band (tylko y + opacity) ----
     Rectangle {
-      visible: screen.svc ? (screen.svc.motion && screen.svc.roll > 0.01) : false
+      visible: screen.show("roll") && screen.svc.roll > 0.01
       width: parent.width
       height: parent.height * 2.2
       y: (-1.1 + (screen.svc ? screen.svc.rollPos : -0.3) * 2.2) * parent.height
@@ -223,7 +230,7 @@ Item {
 
     // ---- smuga powidoku: opóźniona kopia pasma (lag 0.12 jak w oryginale) ----
     Rectangle {
-      visible: screen.svc ? screen.svc.motion : false
+      visible: screen.show("roll")
       width: parent.width
       height: parent.height * 2.2
       y: (-1.1 + ((screen.svc ? screen.svc.rollPos : -0.3) - 0.12) * 2.2) * parent.height
@@ -243,7 +250,7 @@ Item {
       id: noiseCv
       anchors.fill: parent
       canvasSize: Qt.size(192, 108)
-      visible: screen.svc ? (screen.svc.motion && screen.svc.noise > 0.01) : false
+      visible: screen.show("noise") && screen.svc.noise > 0.01
       opacity: screen.svc ? screen.svc.noiseOp : 0
       onPaint: {
         if (!screen.svc) return;
@@ -269,7 +276,7 @@ Item {
     Rectangle {
       anchors.fill: parent
       color: "white"
-      visible: screen.svc ? (screen.svc.motion && screen.svc.flick > 0.01) : false
+      visible: screen.show("flicker") && screen.svc.flick > 0.01
       opacity: screen.svc ? screen.svc.flickerOp : 0
     }
 
@@ -278,7 +285,7 @@ Item {
       id: persistCv
       anchors.fill: parent
       canvasSize: Qt.size(480, 270)
-      visible: screen.svc ? screen.svc.motion : false
+      visible: screen.show("glow")
       opacity: screen.svc ? screen.svc.persistOp : 0
       onPaint: {
         var ctx = getContext("2d");
@@ -298,6 +305,7 @@ Item {
       id: glowCv
       anchors.fill: parent
       canvasSize: Qt.size(480, 270)
+      visible: screen.show("glow")
       opacity: screen.svc ? screen.svc.glowOp : 0
       onPaint: {
         var ctx = getContext("2d");
@@ -323,7 +331,7 @@ Item {
       id: bloomCv
       anchors.fill: parent
       canvasSize: Qt.size(480, 270)
-      visible: screen.svc ? screen.svc.motion : false
+      visible: screen.show("glow")
       opacity: screen.svc ? screen.svc.bloomOp : 0
       onPaint: {
         var ctx = getContext("2d");

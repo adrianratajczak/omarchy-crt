@@ -69,6 +69,9 @@ Item {
   property bool wobbling: false
   property string lastWritten: ""
   property int loadFails: 0
+  // Diagnostyka/wydajnosc: solo ogranicza widoczne warstwy ("all", "static",
+  // "flicker", "roll", "noise", "glow"). Sesyjne, nie persistowane.
+  property string solo: "all"
 
   // Ponawianie odczytu zamiast slepego zapisu defaultow: przy duszacej sie
   // petli / goracym przeladowaniu pierwszy odczyt moze nie wyjsc, a zapis
@@ -349,6 +352,7 @@ Item {
       } catch (e) {
         return "bad-json";
       }
+      if (patch.solo !== undefined) root.solo = String(patch.solo);
       root.applyPatch(patch || {});
       root.markCustom();
       root.saveSoon();
